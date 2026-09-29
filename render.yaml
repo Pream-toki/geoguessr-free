@@ -1,0 +1,15 @@
+# Render.com Blueprint — deploys the full game (client + API) as one free web service.
+# Render reads this file automatically when you create a "Blueprint" from your repo.
+services:
+  - type: web
+    name: geoguessr-free
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: VITE_MAPILLARY_TOKEN
+        sync: false          # paste your Mapillary token in the Render dashboard
+      - key: NODE_ENV
+        value: production
