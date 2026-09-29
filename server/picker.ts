@@ -41,7 +41,7 @@ export interface PickerDeps {
   token: string;
   fetchFn?: typeof fetch;
   rng?: () => number;
-  /** Max attempts before giving up (each attempt = 1 Mapillary query). */
+  /** Max attempts before giving up (each attempt = 1 Mapillary query, 50 m radius). */
   maxAttempts?: number;
   /** Max consecutive seed picks before forcing a live refresh. */
   seedStreakLimit?: number;
@@ -68,18 +68,18 @@ async function queryPanoInBox(
   token: string,
   lat: number,
   lng: number,
-  spanDeg = 0.02,
+  _spanDeg = 0.02,
 ): Promise<PanoLocation | null> {
-  const w = (lng - spanDeg).toFixed(4);
-  const s = (lat - spanDeg).toFixed(4);
-  const e = (lng + spanDeg).toFixed(4);
-  const n = (lat + spanDeg).toFixed(4);
+  // NOTE: the lat/lng/radius form is the only query shape reliably accepted
+  // by the Mapillary Graph API for client tokens (bbox triggers a data-volume
+  // guard). Radius is meters, capped at 50.
   const url =
-    `${GRAPH_API}/images?access_token=${encodeURIComponent(token)}` +
-    `&bbox=${w},${s},${e},${n}&is_pano=true` +
-    `&fields=id,computed_geometry,geometry,is_pano&limit=100`;
+    `${GRAPH_API}/images` +
+    `?access_token=${encodeURIComponent(token)}` +
+    `&lat=${lat.toFixed(5)}&lng=${lng.toFixed(5)}&radius=50` +
+    `&is_pano=true&fields=id,computed_geometry,geometry,is_pano&limit=100`;
   try {
-    const res = await fetchFn(url, { signal: AbortSignal.timeout(10_000) });
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return null;
     const body = (await res.json()) as { data?: ApiImage[] };
     const images = Array.isArray(body?.data) ? body.data : [];
@@ -112,7 +112,7 @@ function pickFromSeeds(deps: PickerDeps): PanoLocation | null {
 export async function pickPanoLocation(deps: PickerDeps): Promise<PanoLocation | null> {
   const fetchFn = deps.fetchFn ?? fetch;
   const rng = deps.rng ?? Math.random;
-  const maxAttempts = deps.maxAttempts ?? 12;
+  const maxAttempts = deps.maxAttempts ?? 30;
   const seedStreakLimit = deps.seedStreakLimit ?? 4;
   const fullDeps: PickerDeps = { ...deps, fetchFn, rng };
 
@@ -123,11 +123,11 @@ export async function pickPanoLocation(deps: PickerDeps): Promise<PanoLocation |
   }
 
   // Tier 2: live Mapillary queries around random points in curated regions.
+  // Each query only covers a 50 m radius, so we take more attempts.
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const region: Region = pickRandomRegion(rng);
     const { lat, lng } = randomPointInRegion(region, rng);
-    const span = 0.02 * Math.pow(2, Math.floor(attempt / 3)); // widen after every 3 misses
-    const found = await queryPanoInBox(fetchFn, deps.token, lat, lng, span);
+    const found = await queryPanoInBox(fetchFn, deps.token, lat, lng);
     if (found) return found;
   }
   return null;

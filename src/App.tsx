@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { api } from "./api";
 import PanoViewer from "./components/PanoViewer";
 import GuessMap from "./components/GuessMap";
 import Hud from "./components/Hud";
@@ -8,11 +9,19 @@ import SummaryScreen from "./components/SummaryScreen";
 import { useGame } from "./state/useGame";
 import { bestScore, loadHistory, saveGame, type GameHistoryEntry } from "./history";
 
-const MAPILLARY_TOKEN: string = import.meta.env.VITE_MAPILLARY_TOKEN ?? "";
-
 export default function App() {
   const { state, startGame, submitGuess, nextRound, reset } = useGame();
   const [history, setHistory] = useState<GameHistoryEntry[]>(() => loadHistory());
+  const [mapillaryToken, setMapillaryToken] = useState<string>(
+    () => import.meta.env.VITE_MAPILLARY_TOKEN ?? "",
+  );
+
+  // Prefer the token served by our API (env-agnostic, swappable without rebuild).
+  useEffect(() => {
+    api.config().then((c) => {
+      if (c.mapillaryToken) setMapillaryToken(c.mapillaryToken);
+    }).catch(() => undefined);
+  }, []);
 
   // Persist finished games once, when the summary phase is entered.
   const [savedSessionId, setSavedSessionId] = useState<string | null>(null);
@@ -76,7 +85,7 @@ export default function App() {
   // loading / playing / result / error all render the game screen.
   return (
     <div className="game-screen">
-      <PanoViewer imageId={state.round?.imageId ?? null} token={MAPILLARY_TOKEN} />
+      <PanoViewer imageId={state.round?.imageId ?? null} token={mapillaryToken} />
 
       <Hud
         roundNumber={

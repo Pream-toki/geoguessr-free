@@ -6,7 +6,7 @@
  * candidate directly, and writes server/seeds/locations.json.
  */
 import "dotenv/config";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { REGIONS } from "../regions";
 
@@ -26,9 +26,10 @@ interface Candidate {
   sequenceId?: string;
 }
 
-const TARGET_PER_REGION = 30;
-const SAMPLES_PER_REGION = 10;
-const SEPARATORS_MS = 120;
+const TARGET_PER_REGION = 10;
+// Each query covers only a 50 m radius, so sample generously per region.
+const SAMPLES_PER_REGION = 45;
+const SEPARATORS_MS = 150;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -37,15 +38,14 @@ function bboxPoint(rng: () => number, bbox: [number, number, number, number]): {
   return { lng: w + rng() * (e - w), lat: s + rng() * (n - s) };
 }
 
-async function queryPanos(lat: number, lng: number, spanDeg: number): Promise<Candidate[]> {
-  const w = (lng - spanDeg).toFixed(4);
-  const s = (lat - spanDeg).toFixed(4);
-  const e = (lng + spanDeg).toFixed(4);
-  const n = (lat + spanDeg).toFixed(4);
+async function queryPanos(lat: number, lng: number, _spanDeg: number): Promise<Candidate[]> {
+  // lat/lng/radius form: the only query shape reliably accepted for client
+  // tokens (bbox hits a data-volume guard). Radius capped at 50 meters.
   const url =
-    `${GRAPH_API}/images?access_token=${encodeURIComponent(TOKEN)}` +
-    `&bbox=${w},${s},${e},${n}&is_pano=true` +
-    `&fields=id,computed_geometry,geometry,is_pano,sequence_id&limit=100`;
+    `${GRAPH_API}/images` +
+    `?access_token=${encodeURIComponent(TOKEN)}` +
+    `&lat=${lat.toFixed(5)}&lng=${lng.toFixed(5)}&radius=50` +
+    `&is_pano=true&fields=id,computed_geometry,geometry,is_pano,sequence_id&limit=100`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return [];
@@ -106,10 +106,9 @@ async function main() {
     const seenGrids = new Set<string>();
     const candidates: Candidate[] = [];
 
-    for (let i = 0; i < SAMPLES_PER_REGION && candidates.length < TARGET_PER_REGION * 2; i++) {
+    for (let i = 0; i < SAMPLES_PER_REGION; i++) {
       const { lat, lng } = bboxPoint(Math.random, region.bbox);
-      const span = 0.03; // ~6.6 km box → dense urban hits
-      const found = await queryPanos(lat, lng, span);
+      const found = await queryPanos(lat, lng, 0);
       for (const c of found) {
         if (seenImages.has(c.imageId)) continue;
         seenImages.add(c.imageId);
@@ -132,19 +131,32 @@ async function main() {
       verified++;
     }
     console.log(`  ${region.id.padEnd(8)} ${region.name.padEnd(26)} verified: ${verified}`);
+
+    // Incremental write: the seed file is useful even if the run stops early.
+    const outDir = path.join(process.cwd(), "server", "seeds");
+    mkdirSync(outDir, { recursive: true });
+    const outFile = path.join(outDir, "locations.json");
+    let existing: Array<{ imageId: string }> = [];
+    if (existsSync(outFile)) {
+      try {
+        existing = JSON.parse(readFileSync(outFile, "utf-8"));
+      } catch {
+        existing = [];
+      }
+    }
+    const have = new Set(existing.map((e) => e.imageId));
+    const fresh = verifiedAll.filter((c) => !have.has(c.imageId));
+    const merged = [
+      ...existing,
+      ...fresh.map((c) => ({ imageId: c.imageId, lat: c.lat, lng: c.lng, region: c.region })),
+    ];
+    writeFileSync(outFile, JSON.stringify(merged, null, 1));
+    console.log(`    seed file now holds ${merged.length} panos`);
   }
 
-  const outDir = path.join(process.cwd(), "server", "seeds");
-  mkdirSync(outDir, { recursive: true });
-  const outFile = path.join(outDir, "locations.json");
-  const records = verifiedAll.map((c) => ({
-    imageId: c.imageId,
-    lat: c.lat,
-    lng: c.lng,
-    region: c.region,
-  }));
-  writeFileSync(outFile, JSON.stringify(records, null, 1));
-  console.log(`\nWrote ${records.length} verified panos to ${outFile}`);
+  const outFile = path.join(process.cwd(), "server", "seeds", "locations.json");
+  const finalCount = existsSync(outFile) ? (JSON.parse(readFileSync(outFile, "utf-8")) as unknown[]).length : 0;
+  console.log(`\nDone. Seed file holds ${finalCount} verified panos at ${outFile}`);
 }
 
 main().catch((err) => {

@@ -27,6 +27,13 @@ export function createRouter(token: string, deps?: Partial<RouteDeps>): Router {
     res.json({ ok: true, seeds: seedCount(), regions: REGIONS.length });
   });
 
+  // The Mapillary client token is public by design (same as GeoGuessr's own
+  // map keys); serving it here keeps the build env-agnostic and lets us swap
+  // tokens without rebuilding.
+  router.get("/config", (_req, res) => {
+    res.json({ mapillaryToken: token });
+  });
+
   router.post("/game/new", async (_req, res) => {
     const rounds: RoundRecord[] = [];
     for (let i = 0; i < ROUNDS_PER_GAME; i++) {

@@ -39,6 +39,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  config: () => request<{ mapillaryToken: string }>("/api/config"),
+
   newGame: () =>
     request<NewGameResponse>("/api/game/new", { method: "POST" }),
 
